@@ -290,17 +290,17 @@ Resources:
         ExcludeCharacters: '"@/\\'
         RequireEachIncludedType: true
 
-  # DB Subnet Group - Using PRIVATE subnets for security
+  # DB Subnet Group - Using PUBLIC subnets for Hyperdrive access (dev only)
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: Private subnet group for Aurora PostgreSQL cluster
+      DBSubnetGroupDescription: Public subnet group for Aurora PostgreSQL cluster (Hyperdrive access)
       SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
       Tags:
         - Key: Name
-          Value: 'six-worker-private-subnet-group'
+          Value: 'six-worker-public-subnet-group'
         - Key: Environment
           Value: !Ref Environment
 
@@ -344,9 +344,7 @@ Resources:
       DatabaseName: !Ref DatabaseName
       Port: 5432  # FIXED: Correct PostgreSQL port
       MasterUsername: !Ref MasterUsername
-      ManageMasterUserPassword: true
-      MasterUserSecret:
-        SecretArn: !Ref DatabaseSecret
+      MasterUserPassword: 'DevPassword123!'
       DBSubnetGroupName: !Ref DBSubnetGroup
       VpcSecurityGroupIds:
         - !Ref DatabaseSecurityGroup

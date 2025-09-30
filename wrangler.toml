@@ -2,15 +2,13 @@ name = "six-worker"
 main = "src/worker.py"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["python_workers"]
-python_version = "3.11"
 
 [vars]
 ENVIRONMENT = "development"
 
-# Hyperdrive configuration will be added here
-# [[hyperdrive]]
-# binding = "DB"
-# id = "your-hyperdrive-id"
+[[hyperdrive]]
+binding = "DB"
+id = "fa6ff986bc2f47d69e5c62873bee4020"
 
 # Queue configuration will be added here
 # [[queues.consumers]]
