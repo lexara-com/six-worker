@@ -1,0 +1,178 @@
+name: Deploy Six Worker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  WRANGLER_VERSION: '4.40.3'
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pylint black isort
+          
+      - name: Lint Python code
+        run: |
+          black --check src/
+          isort --check-only src/
+          pylint src/ --fail-under=8.0
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{ env.WRANGLER_VERSION }}
+        
+      - name: Validate wrangler.toml
+        run: wrangler validate
+
+  deploy-infrastructure:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: lint-and-test
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+          
+      - name: Deploy Aurora Infrastructure
+        run: |
+          # Check if stack exists
+          if aws cloudformation describe-stacks --stack-name six-worker-aurora-production >/dev/null 2>&1; then
+            echo "Stack exists, updating..."
+            aws cloudformation update-stack \
+              --stack-name six-worker-aurora-production \
+              --template-body file://cloudformation/aurora-secure.yaml \
+              --parameters ParameterKey=Environment,ParameterValue=prod \
+              --capabilities CAPABILITY_IAM
+            aws cloudformation wait stack-update-complete --stack-name six-worker-aurora-production
+          else
+            echo "Stack doesn't exist, creating..."
+            aws cloudformation create-stack \
+              --stack-name six-worker-aurora-production \
+              --template-body file://cloudformation/aurora-secure.yaml \
+              --parameters ParameterKey=Environment,ParameterValue=prod \
+              --capabilities CAPABILITY_IAM
+            aws cloudformation wait stack-create-complete --stack-name six-worker-aurora-production
+          fi
+          
+      - name: Get Aurora connection info
+        id: aurora
+        run: |
+          ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name six-worker-aurora-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`ClusterEndpoint`].OutputValue' \
+            --output text)
+          SECRET_ARN=$(aws cloudformation describe-stacks \
+            --stack-name six-worker-aurora-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`DatabaseSecretArn`].OutputValue' \
+            --output text)
+          echo "endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
+          echo "secret_arn=$SECRET_ARN" >> $GITHUB_OUTPUT
+
+  deploy-worker:
+    name: Deploy Cloudflare Worker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [lint-and-test, deploy-infrastructure]
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install Wrangler
+        run: npm install -g wrangler@${{ env.WRANGLER_VERSION }}
+        
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: wrangler deploy --compatibility-date=2024-09-30
+        
+  run-database-migrations:
+    name: Run Database Migrations
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: deploy-infrastructure
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+          
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          
+      - name: Get database credentials
+        id: db-creds
+        run: |
+          SECRET_ARN=$(aws cloudformation describe-stacks \
+            --stack-name six-worker-aurora-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`DatabaseSecretArn`].OutputValue' \
+            --output text)
+          SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query 'SecretString' --output text)
+          USERNAME=$(echo "$SECRET_VALUE" | jq -r '.username')
+          PASSWORD=$(echo "$SECRET_VALUE" | jq -r '.password')
+          ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name six-worker-aurora-production \
+            --query 'Stacks[0].Outputs[?OutputKey==`ClusterEndpoint`].OutputValue' \
+            --output text)
+          echo "username=$USERNAME" >> $GITHUB_OUTPUT
+          echo "password=$PASSWORD" >> $GITHUB_OUTPUT
+          echo "endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
+          
+      - name: Run migrations
+        env:
+          PGPASSWORD: ${{ steps.db-creds.outputs.password }}
+        run: |
+          # Run migrations in order
+          psql -h ${{ steps.db-creds.outputs.endpoint }} \
+               -U ${{ steps.db-creds.outputs.username }} \
+               -d graph_db \
+               -f db/migrations/V1__initial_schema.sql
+               
+          psql -h ${{ steps.db-creds.outputs.endpoint }} \
+               -U ${{ steps.db-creds.outputs.username }} \
+               -d graph_db \
+               -f db/migrations/V2__indexes_and_performance.sql
+               
+          echo "Database migrations completed successfully"
