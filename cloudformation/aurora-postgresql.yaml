@@ -1,0 +1,490 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Aurora PostgreSQL cluster for Six Worker graph database'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: Environment name
+  
+  DatabaseName:
+    Type: String
+    Default: 'graph_db'
+    Description: Database name
+    
+  MasterUsername:
+    Type: String
+    Default: 'graph_admin'
+    Description: Master username for the database
+    
+  InstanceClass:
+    Type: String
+    Default: 'db.r6g.large'
+    AllowedValues: 
+      - db.r6g.large
+      - db.r6g.xlarge  
+      - db.r6g.2xlarge
+      - db.r6g.4xlarge
+    Description: Aurora instance class
+    
+  MinCapacity:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 16
+    Description: Minimum Aurora capacity units
+    
+  MaxCapacity:
+    Type: Number
+    Default: 8
+    MinValue: 1
+    MaxValue: 128
+    Description: Maximum Aurora capacity units
+    
+  VpcCIDR:
+    Type: String
+    Default: '10.0.0.0/16'
+    Description: CIDR block for VPC
+    
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: '10.0.1.0/24'
+    Description: CIDR block for private subnet 1
+    
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: '10.0.2.0/24'
+    Description: CIDR block for private subnet 2
+    
+  PublicSubnet1CIDR:
+    Type: String
+    Default: '10.0.101.0/24'
+    Description: CIDR block for public subnet 1
+    
+  AllowedCIDRBlocks:
+    Type: CommaDelimitedList
+    Default: '10.0.0.0/16'
+    Description: CIDR blocks allowed to connect to database
+    
+  KeyPairName:
+    Type: String
+    Description: 'Name of existing EC2 KeyPair for bastion host access'
+    Default: 'six-worker-key'
+
+Resources:
+  # =============================================
+  # Networking Infrastructure
+  # =============================================
+  
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-vpc'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-igw'
+          
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+      
+  # Private Subnets for Database
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-private-subnet-1'
+          
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-private-subnet-2'
+          
+  # Public Subnet for NAT Gateway and Bastion
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-public-subnet-1'
+          
+  # NAT Gateway for private subnet internet access
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-nat-gateway'
+          
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-public-routes'
+          
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+      
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-private-routes'
+          
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+      
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+      
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  # =============================================
+  # Security Groups
+  # =============================================
+  
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${Environment}-six-worker-db-sg'
+      GroupDescription: Security group for Aurora PostgreSQL database
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref VpcCIDR
+          Description: 'PostgreSQL access from VPC'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+          Description: 'PostgreSQL access from bastion host'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-db-sg'
+          
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${Environment}-six-worker-bastion-sg'
+      GroupDescription: Security group for bastion host
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: 'SSH access from anywhere'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-bastion-sg'
+
+  # =============================================
+  # Secrets Manager
+  # =============================================
+  
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${Environment}/six-worker/database'
+      Description: 'Database credentials for Six Worker'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${MasterUsername}"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: six-worker
+
+  # =============================================
+  # Aurora PostgreSQL Cluster
+  # =============================================
+  
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${Environment}-six-worker-subnet-group'
+      DBSubnetGroupDescription: Subnet group for Aurora PostgreSQL cluster
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-subnet-group'
+          
+  DBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      DBClusterParameterGroupName: !Sub '${Environment}-six-worker-cluster-params'
+      Description: 'Custom parameters for Six Worker Aurora cluster'
+      Family: 'aurora-postgresql15'
+      Parameters:
+        shared_preload_libraries: 'pg_stat_statements'
+        log_statement: 'mod'  # Log data-modifying statements
+        log_min_duration_statement: 1000  # Log slow queries
+        track_activity_query_size: 2048
+        log_rotation_size: 100000
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      DBParameterGroupName: !Sub '${Environment}-six-worker-instance-params'
+      Description: 'Custom parameters for Six Worker Aurora instances'
+      Family: 'aurora-postgresql15'
+      Parameters:
+        work_mem: '256MB'
+        maintenance_work_mem: '2GB'
+        effective_cache_size: '4GB'
+        random_page_cost: '1.1'  # SSD optimization
+        max_connections: 200
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    Properties:
+      DBClusterIdentifier: !Sub '${Environment}-six-worker-cluster'
+      Engine: aurora-postgresql
+      EngineVersion: '15.4'
+      DatabaseName: !Ref DatabaseName
+      MasterUsername: !Ref MasterUsername
+      ManageMasterUserPassword: true
+      MasterUserSecret:
+        SecretArn: !Ref DatabaseSecret
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: '07:00-08:00'
+      PreferredMaintenanceWindow: 'sun:08:00-sun:09:00'
+      EnableCloudwatchLogsExports:
+        - postgresql
+      StorageEncrypted: true
+      DeletionProtection: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-cluster'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: six-worker
+          
+  AuroraInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${Environment}-six-worker-instance-1'
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: !Ref InstanceClass
+      DBParameterGroupName: !Ref DBParameterGroup
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt EnhancedMonitoringRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-instance-1'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  AuroraReadReplica:
+    Type: AWS::RDS::DBInstance
+    Condition: CreateReadReplica
+    Properties:
+      DBInstanceIdentifier: !Sub '${Environment}-six-worker-read-replica'
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: !Ref InstanceClass
+      DBParameterGroupName: !Ref DBParameterGroup
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt EnhancedMonitoringRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-read-replica'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # =============================================
+  # IAM Roles
+  # =============================================
+  
+  EnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      Path: /
+      
+  # =============================================
+  # Bastion Host for Database Access
+  # =============================================
+  
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0230bd60aa48260c6  # Amazon Linux 2023 (update for your region)
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y postgresql15
+          
+          # Install psql client
+          amazon-linux-extras install postgresql15 -y
+          
+          # Create connection script
+          cat > /home/ec2-user/connect-db.sh << 'EOF'
+          #!/bin/bash
+          PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id "${DatabaseSecret}" --query SecretString --output text | jq -r .password)
+          psql -h ${AuroraCluster.Endpoint.Address} -U ${MasterUsername} -d ${DatabaseName}
+          EOF
+          
+          chmod +x /home/ec2-user/connect-db.sh
+          chown ec2-user:ec2-user /home/ec2-user/connect-db.sh
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-bastion'
+        - Key: Environment
+          Value: !Ref Environment
+
+Conditions:
+  CreateReadReplica: !Not [!Equals [!Ref Environment, 'dev']]
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora cluster endpoint
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${Environment}-six-worker-cluster-endpoint'
+      
+  ReaderEndpoint:
+    Description: Aurora cluster reader endpoint
+    Value: !GetAtt AuroraCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub '${Environment}-six-worker-reader-endpoint'
+      
+  DatabasePort:
+    Description: Database port
+    Value: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: !Sub '${Environment}-six-worker-db-port'
+      
+  DatabaseName:
+    Description: Database name
+    Value: !Ref DatabaseName
+    Export:
+      Name: !Sub '${Environment}-six-worker-db-name'
+      
+  DatabaseSecretArn:
+    Description: ARN of the database secret
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub '${Environment}-six-worker-db-secret-arn'
+      
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${Environment}-six-worker-vpc-id'
+      
+  PrivateSubnet1Id:
+    Description: Private subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${Environment}-six-worker-private-subnet-1'
+      
+  PrivateSubnet2Id:
+    Description: Private subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${Environment}-six-worker-private-subnet-2'
+      
+  BastionHostIP:
+    Description: Bastion host public IP
+    Value: !GetAtt BastionHost.PublicIp
+    Export:
+      Name: !Sub '${Environment}-six-worker-bastion-ip'

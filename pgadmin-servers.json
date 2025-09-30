@@ -1,0 +1,15 @@
+{
+    "Servers": {
+        "1": {
+            "Name": "Six Worker Local DB",
+            "Group": "Servers",
+            "Host": "postgres",
+            "Port": 5432,
+            "MaintenanceDB": "graph_db",
+            "Username": "graph_admin",
+            "Password": "dev_password_123",
+            "SSLMode": "prefer",
+            "Comment": "Local PostgreSQL instance for Six Worker development"
+        }
+    }
+}

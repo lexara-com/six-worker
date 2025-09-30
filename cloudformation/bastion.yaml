@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Bastion host for Aurora PostgreSQL access'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    
+  KeyPairName:
+    Type: String
+    Default: 'six-worker-key'
+    Description: EC2 Key Pair name
+
+Resources:
+  # Get VPC and subnet from existing stack
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for bastion host
+      VpcId: 
+        Fn::ImportValue: !Sub '${Environment}-six-worker-vpc-id'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+          Description: SSH access
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-bastion-sg'
+          
+  # Update database security group to allow bastion access
+  DatabaseSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Sub '{{resolve:ssm:/six-worker/${Environment}/database-sg-id}}'
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Description: 'PostgreSQL access from bastion'
+      
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: 'ami-0230bd60aa48260c6'  # Amazon Linux 2023
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      SubnetId: 
+        Fn::ImportValue: !Sub '${Environment}-six-worker-public-subnet-1'
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y postgresql15 wget
+          
+          # Install psql client
+          dnf install -y postgresql15
+          
+          # Download migration files
+          mkdir -p /home/ec2-user/migrations
+          mkdir -p /home/ec2-user/test-data
+          
+          echo "Database setup complete" > /home/ec2-user/setup-complete.txt
+          chown -R ec2-user:ec2-user /home/ec2-user/
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-six-worker-bastion'
+
+  # IAM role for bastion to access Secrets Manager
+  BastionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: 
+                  Fn::ImportValue: !Sub '${Environment}-six-worker-db-secret-arn'
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BastionRole
+
+Outputs:
+  BastionPublicIP:
+    Description: Public IP of bastion host
+    Value: !GetAtt BastionHost.PublicIp
+    Export:
+      Name: !Sub '${Environment}-bastion-public-ip'

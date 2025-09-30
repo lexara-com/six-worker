@@ -1,0 +1,2 @@
+# No additional Python packages required for basic Cloudflare Worker
+# Cloudflare Workers Python runtime includes standard library

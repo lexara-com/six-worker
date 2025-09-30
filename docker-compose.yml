@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: six_worker_postgres
+    environment:
+      POSTGRES_DB: graph_db
+      POSTGRES_USER: graph_admin
+      POSTGRES_PASSWORD: dev_password_123
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d/migrations:ro
+      - ./db/test-data:/docker-entrypoint-initdb.d/test-data:ro
+      - ./init-db.sh:/docker-entrypoint-initdb.d/00-init-db.sh:ro
+    networks:
+      - six_worker_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graph_admin -d graph_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: six_worker_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@sixworker.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin-servers.json:/pgadmin4/servers.json:ro
+    networks:
+      - six_worker_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  six_worker_network:
+    driver: bridge

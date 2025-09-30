@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Simple Aurora PostgreSQL cluster for Six Worker'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    Description: Environment name
+  
+  DatabaseName:
+    Type: String
+    Default: 'graph_db'
+    Description: Database name
+    
+  MasterUsername:
+    Type: String
+    Default: 'graph_admin'
+    Description: Master username for the database
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: 'six-worker-vpc'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'six-worker-igw'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+      
+  # Private Subnets
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: 'six-worker-private-subnet-1'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: 'six-worker-private-subnet-2'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Public Subnet
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.101.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'six-worker-public-subnet-1'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: 'six-worker-public-routes'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  # Security Group
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Aurora PostgreSQL database
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '10.0.0.0/16'
+          Description: 'PostgreSQL access from VPC'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '0.0.0.0/0'
+          Description: 'PostgreSQL access for Hyperdrive integration'
+      Tags:
+        - Key: Name
+          Value: 'six-worker-db-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # Public Subnet 2 for Aurora (need 2 AZs minimum)
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.102.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'six-worker-public-subnet-2'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # DB Subnet Group - Using PUBLIC subnets for Hyperdrive access
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Public subnet group for Aurora PostgreSQL cluster (Hyperdrive access)
+      SubnetIds:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: 'six-worker-public-subnet-group'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Aurora Cluster
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    Properties:
+      DBClusterIdentifier: 'six-worker-cluster'
+      Engine: aurora-postgresql
+      EngineVersion: '15.4'
+      DatabaseName: !Ref DatabaseName
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: 'TempPassword123!'  # Simple password for dev
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      BackupRetentionPeriod: 7
+      StorageEncrypted: false  # Disabled due to KMS permissions issue
+      DeletionProtection: false  # Set to false for dev environment
+      Tags:
+        - Key: Name
+          Value: 'six-worker-cluster'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Aurora Instance
+  AuroraInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: 'six-worker-instance-1'
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: 'db.t4g.medium'  # Smaller instance for dev
+      Engine: aurora-postgresql
+      PubliclyAccessible: true
+      Tags:
+        - Key: Name
+          Value: 'six-worker-instance-1'
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora cluster endpoint
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: 'six-worker-cluster-endpoint'
+      
+  DatabasePort:
+    Description: Database port
+    Value: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: 'six-worker-db-port'
+      
+  DatabaseName:
+    Description: Database name
+    Value: !Ref DatabaseName
+    Export:
+      Name: 'six-worker-db-name'
+      
+      
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: 'six-worker-vpc-id'
+      
+  PublicSubnetId:
+    Description: Public subnet ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: 'six-worker-public-subnet-1'
+      
+  DatabaseSecurityGroupId:
+    Description: Database security group ID
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: 'six-worker-db-sg-id'

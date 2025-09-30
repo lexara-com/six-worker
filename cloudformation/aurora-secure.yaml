@@ -1,0 +1,457 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Security-hardened Aurora PostgreSQL cluster for Six Worker'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    Description: Environment name
+  
+  DatabaseName:
+    Type: String
+    Default: 'graph_db'
+    Description: Database name
+    
+  MasterUsername:
+    Type: String
+    Default: 'graph_admin'
+    Description: Master username for the database
+
+Resources:
+
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: 'six-worker-vpc'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'six-worker-igw'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # NAT Gateway for private subnets
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: 'six-worker-nat-eip'
+        - Key: Environment
+          Value: !Ref Environment
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: 'six-worker-nat-gateway'
+        - Key: Environment
+          Value: !Ref Environment
+      
+  # Public Subnets (for NAT Gateway and RDS Proxy)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.101.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'six-worker-public-subnet-1'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.102.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'six-worker-public-subnet-2'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Private Subnets for Aurora
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: 'six-worker-private-subnet-1'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: 'six-worker-private-subnet-2'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: 'six-worker-public-routes'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+      
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: 'six-worker-private-routes'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+      
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+      
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  # Security Group for Aurora - Restricted to Cloudflare IPs only
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Aurora PostgreSQL database - Cloudflare IPs only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '10.0.0.0/16'
+          Description: 'PostgreSQL access from VPC'
+        # Cloudflare IP ranges for Hyperdrive
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '173.245.48.0/20'
+          Description: 'Cloudflare IP range 1'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '103.21.244.0/22'
+          Description: 'Cloudflare IP range 2'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '103.22.200.0/22'
+          Description: 'Cloudflare IP range 3'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '103.31.4.0/22'
+          Description: 'Cloudflare IP range 4'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '141.101.64.0/18'
+          Description: 'Cloudflare IP range 5'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '108.162.192.0/18'
+          Description: 'Cloudflare IP range 6'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '190.93.240.0/20'
+          Description: 'Cloudflare IP range 7'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '188.114.96.0/20'
+          Description: 'Cloudflare IP range 8'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '197.234.240.0/22'
+          Description: 'Cloudflare IP range 9'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '198.41.128.0/17'
+          Description: 'Cloudflare IP range 10'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '162.158.0.0/15'
+          Description: 'Cloudflare IP range 11'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '104.16.0.0/13'
+          Description: 'Cloudflare IP range 12'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '104.24.0.0/14'
+          Description: 'Cloudflare IP range 13'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '172.64.0.0/13'
+          Description: 'Cloudflare IP range 14'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '131.0.72.0/22'
+          Description: 'Cloudflare IP range 15'
+      Tags:
+        - Key: Name
+          Value: 'six-worker-db-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Database Secret in Secrets Manager
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: 'six-worker/database'
+      Description: 'Database credentials for Six Worker Aurora cluster'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${MasterUsername}"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\'
+        RequireEachIncludedType: true
+
+  # DB Subnet Group - Using PRIVATE subnets for security
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnet group for Aurora PostgreSQL cluster
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: 'six-worker-private-subnet-group'
+        - Key: Environment
+          Value: !Ref Environment
+
+          
+  # Aurora Cluster Parameter Group
+  DBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: Parameter group for Six Worker Aurora PostgreSQL cluster
+      Family: aurora-postgresql15
+      Parameters:
+        log_statement: 'all'  # Log all SQL statements
+        log_min_duration_statement: 1000  # Log slow queries (>1s)
+        shared_preload_libraries: 'pg_stat_statements'
+      Tags:
+        - Key: Name
+          Value: 'six-worker-cluster-params'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Aurora Instance Parameter Group  
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Parameter group for Six Worker Aurora PostgreSQL instances
+      Family: aurora-postgresql15
+      Tags:
+        - Key: Name
+          Value: 'six-worker-instance-params'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Aurora Cluster - SECURE Configuration
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    Properties:
+      DBClusterIdentifier: 'six-worker-cluster'
+      Engine: aurora-postgresql
+      EngineVersion: '15.4'
+      DatabaseName: !Ref DatabaseName
+      Port: 5432  # FIXED: Correct PostgreSQL port
+      MasterUsername: !Ref MasterUsername
+      ManageMasterUserPassword: true
+      MasterUserSecret:
+        SecretArn: !Ref DatabaseSecret
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      BackupRetentionPeriod: 14  # Increased backup retention
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      StorageEncrypted: true  # ENABLED: Encryption at rest
+      KmsKeyId: alias/aws/rds  # Custom KMS key
+      DeletionProtection: false  # Keep false for dev environment
+      EnableCloudwatchLogsExports:  # Enable CloudWatch logging
+        - postgresql
+      EnableIAMDatabaseAuthentication: true  # Enable IAM auth
+      Tags:
+        - Key: Name
+          Value: 'six-worker-cluster'
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Aurora Instance 1 - Multi-AZ setup
+  AuroraInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: 'six-worker-instance-1'
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: 'db.t4g.medium'
+      Engine: aurora-postgresql
+      DBParameterGroupName: !Ref DBParameterGroup
+      PubliclyAccessible: true  # Required for Hyperdrive access
+      EnablePerformanceInsights: true  # Enable Performance Insights
+      PerformanceInsightsKMSKeyId: alias/aws/rds
+      PerformanceInsightsRetentionPeriod: 7  # Free tier retention
+      Tags:
+        - Key: Name
+          Value: 'six-worker-instance-1'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Aurora Instance 2 - Multi-AZ for high availability
+  AuroraInstance2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: 'six-worker-instance-2'
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: 'db.t4g.medium'
+      Engine: aurora-postgresql
+      DBParameterGroupName: !Ref DBParameterGroup
+      PubliclyAccessible: true  # Required for Hyperdrive access
+      EnablePerformanceInsights: true
+      PerformanceInsightsKMSKeyId: alias/aws/rds
+      PerformanceInsightsRetentionPeriod: 7
+      Tags:
+        - Key: Name
+          Value: 'six-worker-instance-2'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora cluster endpoint
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: 'six-worker-cluster-endpoint'
+      
+  ClusterPort:
+    Description: Aurora cluster port
+    Value: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: 'six-worker-cluster-port'
+      
+  DatabaseName:
+    Description: Database name
+    Value: !Ref DatabaseName
+    Export:
+      Name: 'six-worker-db-name'
+      
+      
+  DatabaseSecretArn:
+    Description: ARN of the database secret
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: 'six-worker-db-secret-arn'
+      
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: 'six-worker-vpc-id'
+      
+  PrivateSubnet1Id:
+    Description: Private subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: 'six-worker-private-subnet-1'
+      
+  PrivateSubnet2Id:
+    Description: Private subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: 'six-worker-private-subnet-2'
+      
+  DatabaseSecurityGroupId:
+    Description: Database security group ID
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: 'six-worker-db-sg-id'
+      

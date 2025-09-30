@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Simple bastion host for database access'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+
+Resources:
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for bastion host
+      VpcId: 
+        Fn::ImportValue: !Sub '${Environment}-six-worker-vpc-id'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-bastion-sg'
+          
+  # Allow bastion to connect to database
+  DatabaseSGRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: 
+        Fn::ImportValue: !Sub '${Environment}-six-worker-db-sg-id'
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      
+  BastionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: 
+                  Fn::ImportValue: !Sub '${Environment}-six-worker-db-secret-arn'
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BastionRole
+
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: 'ami-0230bd60aa48260c6'
+      InstanceType: t3.micro
+      SubnetId: 
+        Fn::ImportValue: !Sub '${Environment}-six-worker-public-subnet-1'
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y postgresql15 jq
+          
+          # Get values from CloudFormation exports
+          CLUSTER_ENDPOINT=$(aws cloudformation list-exports --region us-east-1 --query 'Exports[?Name==`dev-six-worker-cluster-endpoint`].Value' --output text)
+          DB_NAME=$(aws cloudformation list-exports --region us-east-1 --query 'Exports[?Name==`dev-six-worker-db-name`].Value' --output text)
+          SECRET_ARN=$(aws cloudformation list-exports --region us-east-1 --query 'Exports[?Name==`dev-six-worker-db-secret-arn`].Value' --output text)
+          
+          # Create connection script
+          cat > /home/ec2-user/connect-db.sh << EOFSCRIPT
+          #!/bin/bash
+          SECRET=\$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region us-east-1 --query SecretString --output text)
+          PASSWORD=\$(echo \$SECRET | jq -r .password)
+          USERNAME=\$(echo \$SECRET | jq -r .username)
+          
+          export PGPASSWORD=\$PASSWORD
+          psql -h $CLUSTER_ENDPOINT -U \$USERNAME -d $DB_NAME -p 5432
+          EOFSCRIPT
+          
+          chmod +x /home/ec2-user/connect-db.sh
+          chown ec2-user:ec2-user /home/ec2-user/connect-db.sh
+          
+          # Create directories for SQL files
+          mkdir -p /home/ec2-user/migrations /home/ec2-user/test-data
+          chown -R ec2-user:ec2-user /home/ec2-user/
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-bastion'
+
+Outputs:
+  BastionIP:
+    Value: !GetAtt BastionHost.PublicIp
+    Description: Bastion host public IP
+    
+  ConnectCommand:
+    Value: !Sub |
+      scp -i six-worker-key.pem ../db/migrations/*.sql ec2-user@${BastionHost.PublicIp}:~/migrations/
+      scp -i six-worker-key.pem ../db/test-data/*.sql ec2-user@${BastionHost.PublicIp}:~/test-data/
+      ssh -i six-worker-key.pem ec2-user@${BastionHost.PublicIp}
+    Description: Commands to connect and upload files
