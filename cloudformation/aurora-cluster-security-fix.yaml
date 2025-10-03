@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Security Group Fix for Existing Aurora Cluster - Add access for IP 4.8.91.154'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    Description: Environment name
+    
+  AuthorizedIP:
+    Type: String
+    Default: '4.8.91.154'
+    Description: IP address to allow database access
+
+Resources:
+  # =============================================
+  # Security Group for Aurora Cluster
+  # =============================================
+  
+  AuroraSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Aurora PostgreSQL cluster with authorized IP access
+      VpcId: vpc-321ddf57  # Using the default VPC from your environment
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Sub '${AuthorizedIP}/32'
+          Description: !Sub 'PostgreSQL access from authorized IP ${AuthorizedIP}'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '0.0.0.0/0'
+          Description: 'PostgreSQL access for Hyperdrive and public access'
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: '0.0.0.0/0'
+          Description: 'Allow all outbound traffic'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-aurora-security-group'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: 'Aurora PostgreSQL Access'
+
+Outputs:
+  SecurityGroupId:
+    Description: Security Group ID for Aurora cluster
+    Value: !Ref AuroraSecurityGroup
+    Export:
+      Name: !Sub '${Environment}-aurora-security-group-id'
+      
+  SecurityGroupArn:
+    Description: Security Group ARN
+    Value: !GetAtt AuroraSecurityGroup.GroupId
+    Export:
+      Name: !Sub '${Environment}-aurora-security-group-arn'
+      
+  Instructions:
+    Description: Next steps to apply this security group
+    Value: !Sub |
+      1. Go to RDS Console → Databases → six-worker-cluster
+      2. Click "Modify" 
+      3. In "Connectivity" section, replace existing security groups with: ${AuroraSecurityGroup}
+      4. Apply changes immediately
+      5. Test connection: psql -h six-worker-cluster.cluster-cg56igkg8ibw.us-east-1.rds.amazonaws.com -U graph_admin -d graph_db

@@ -23,8 +23,8 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: '0.0.0.0/0'
-          Description: SSH access
+          CidrIp: '4.8.91.154/32'
+          Description: 'SSH access from authorized IP'
       Tags:
         - Key: Name
           Value: !Sub '${Environment}-bastion-sg'

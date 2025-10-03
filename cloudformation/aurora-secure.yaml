@@ -195,6 +195,12 @@ Resources:
           ToPort: 5432
           CidrIp: '10.0.0.0/16'
           Description: 'PostgreSQL access from VPC'
+        # Authorized IP for external access
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: '4.8.91.154/32'
+          Description: 'PostgreSQL access from authorized IP'
         # Cloudflare IP ranges for Hyperdrive
         - IpProtocol: tcp
           FromPort: 5432
@@ -344,7 +350,7 @@ Resources:
       DatabaseName: !Ref DatabaseName
       Port: 5432  # FIXED: Correct PostgreSQL port
       MasterUsername: !Ref MasterUsername
-      MasterUserPassword: 'DevPassword123!'
+      MasterUserPassword: !Ref DBMasterPassword  # Use parameter instead
       DBSubnetGroupName: !Ref DBSubnetGroup
       VpcSecurityGroupIds:
         - !Ref DatabaseSecurityGroup

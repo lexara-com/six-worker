@@ -6,3 +6,75 @@ dist/
 coverage/
 *.tgz
 *.tar.gz
+
+# Data files
+*.csv
+*.json
+*.xlsx
+*.xls
+examples/data/
+jobs/*/data/
+
+# Test/debug scripts with credentials (don't commit)
+monitor_*.py
+test_*.py
+test_*.sh
+final_test.sh
+fresh_test.sh
+run_job.sh
+check_*.py
+*_debug.py
+simple_monitor.py
+jobs/*/run_simple.sh
+jobs/*/scripts/run_*.sh
+scripts/run_sql.sh
+scripts/example_usage.sh
+scripts/show_table_status.sh
+scripts/execute_sql.py
+scripts/import_*.py
+scripts/investigate_*.py
+*.backup
+*.py.backup
+*.sh.backup
+
+# Ad-hoc documentation with credentials
+*_REFACTOR*.md
+*_ANALYSIS.md
+*_SUMMARY.md
+*_GUIDE.md
+*_STRATEGY.md
+*_INVENTORY.md
+jobs/*/CLAUDE_CODE_INSTRUCTIONS.md
+jobs/*/ERROR_HANDLING.md
+scripts/README.md
+examples/usage_examples.py
+
+# Ad-hoc SQL query files (analysis/testing)
+analyze_*.sql
+check_*.sql
+cutover_*.sql
+test_*.sql
+query_*.sql
+fix_*.sql
+
+# Credentials and secrets
+*credentials*
+*secrets*
+*.pem
+*.key
+id_rsa*
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

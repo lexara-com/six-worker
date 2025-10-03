@@ -1,0 +1,3 @@
+# Python dependencies for Propose API client
+psycopg2-binary>=2.9.0
+python-dateutil>=2.8.0

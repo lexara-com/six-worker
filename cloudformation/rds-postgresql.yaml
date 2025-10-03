@@ -110,6 +110,11 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
+          CidrIp: '4.8.91.154/32'
+          Description: 'PostgreSQL access from authorized IP'
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
           CidrIp: '0.0.0.0/0'
           Description: 'PostgreSQL access for Hyperdrive integration'
       Tags:

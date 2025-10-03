@@ -1,0 +1,134 @@
+# Iowa Business Entities Loader Configuration
+# 
+# This configuration file defines settings for the Iowa Business Entities
+# rerunnable loader that implements the BaseDataLoader pattern.
+#
+# Data source: https://data.iowa.gov/Regulation/Active-Iowa-Business-Entities/ez5t-3qay
+
+loader:
+  name: "Iowa Business Entities Loader"
+  type: "government_database"
+  version: "2.0.0"
+  description: "Loads Active Iowa Business Entities from data.iowa.gov"
+
+# Source definition - used by BaseDataLoader
+source_name: "Iowa Secretary of State - Active Business Entities"
+source_type: "iowa_gov_database"
+
+source:
+  name: "Iowa Secretary of State - Active Business Entities"
+  type: "iowa_gov_database"
+  update_frequency: "quarterly"
+  url: "https://data.iowa.gov/Regulation/Active-Iowa-Business-Entities/ez5t-3qay"
+  
+input:
+  file_path: "${PROJECT_DIR}/examples/data/Active_Iowa_Business_Entities_20251001.csv"
+  format: "csv"
+  encoding: "utf-8"
+  
+database:
+  host: "${DB_HOST}"
+  port: 5432
+  database: "graph_db"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+  
+processing:
+  batch_size: 1000
+  checkpoint_interval: 5000
+  max_retries: 3
+  retry_delay: 60  # seconds
+  
+validation:
+  required_fields:
+    - legal_name
+    - corp_type
+  date_fields:
+    - effective_date
+  skip_conditions:
+    - missing_legal_name
+    - missing_corp_type
+    
+entity_detection:
+  # Suffixes that indicate a company (not a person) for registered agents
+  business_suffixes:
+    - LLC
+    - INC
+    - INCORPORATED
+    - CORP
+    - CORPORATION
+    - LTD
+    - LIMITED
+    - CO
+    - COMPANY
+    - LP
+    - LLP
+    - PARTNERSHIP
+    - TRUST
+    - BANK
+    - ASSOCIATION
+    - SOCIETY
+    - UNION
+    - FUND
+    
+field_mappings:
+  # Map CSV columns to internal fields
+  corp_number: "Corp Number"
+  legal_name: "Legal Name"
+  corp_type: "Corporation Type"
+  effective_date: "Effective Date"
+  registered_agent:
+    name: "Registered Agent"
+    address1: "RA Address 1"
+    address2: "RA Address 2"
+    city: "RA City"
+    state: "RA State"
+    zip: "RA Zip"
+  home_office:
+    address1: "HO Address 1"
+    address2: "HO Address 2"
+    city: "HO City"
+    state: "HO State"
+    zip: "HO Zip"
+    country: "HO Country"
+    location: "HO Location"  # Contains coordinates
+    
+provenance:
+  confidence_score: 0.92  # High confidence - official government source
+  source_reliability: "official"
+  data_quality: "high"
+  
+logging:
+  level: "INFO"
+  file: "${JOB_DIR}/logs/iowa_business_loader_${DATE}.log"
+  max_size: "100MB"
+  retention: 30  # days
+  
+monitoring:
+  metrics_enabled: true
+  metrics_port: 9090
+  health_check_interval: 60  # seconds
+  alert_thresholds:
+    error_rate: 0.05  # Alert if >5% errors
+    processing_rate_min: 10  # Alert if <10 records/minute
+    stalled_minutes: 30  # Alert if no progress for 30 minutes
+    
+recovery:
+  enable_dead_letter_queue: true
+  dlq_table: "failed_iowa_records"
+  retry_failed_records: true
+  max_retry_attempts: 3
+  
+scheduling:
+  # Cron expression for quarterly runs (first Monday of Jan, Apr, Jul, Oct)
+  cron: "0 2 1-7 1,4,7,10 1"
+  timezone: "America/Chicago"
+  notification_email: "admin@example.com"
+  
+# Environment variable substitution
+# Use ${VAR_NAME} syntax to reference environment variables
+# Required environment variables:
+#   DB_HOST - Database hostname or IP
+#   DB_USER - Database username
+#   DB_PASSWORD - Database password
+#   DATE - Current date for log file naming

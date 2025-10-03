@@ -1,0 +1,168 @@
+# Iowa Business Entities Loader Configuration - Hardened Version
+#
+# This configuration includes robustness and fault-tolerance features
+
+loader:
+  name: "Iowa Business Entities Loader (Robust)"
+  type: "government_database"
+  version: "3.0.0"
+  description: "Hardened loader for Active Iowa Business Entities"
+
+# Source definition
+source_name: "Iowa Secretary of State - Active Business Entities"
+source_type: "iowa_gov_database"
+
+source:
+  name: "Iowa Secretary of State - Active Business Entities"
+  type: "iowa_gov_database"
+  update_frequency: "quarterly"
+  url: "https://data.iowa.gov/Regulation/Active-Iowa-Business-Entities/ez5t-3qay"
+
+input:
+  file_path: "${PROJECT_DIR}/examples/data/Active_Iowa_Business_Entities_20251001.csv"
+  format: "csv"
+  encoding: "utf-8"
+
+database:
+  host: "${DB_HOST}"
+  port: 5432
+  database: "graph_db"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+
+# Robustness features
+robustness:
+  # Connection pooling
+  use_connection_pool: true
+  min_connections: 2
+  max_connections: 10
+
+  # Circuit breaker
+  circuit_breaker_threshold: 10  # Open after 10 failures
+  circuit_breaker_timeout: 60    # Wait 60s before retry
+
+  # Retry logic
+  max_retries: 3
+  retry_delay: 2.0              # Initial delay in seconds
+  retry_backoff: 2.0            # Exponential backoff multiplier
+  retryable_errors:
+    - "OperationalError"
+    - "DatabaseError"
+    - "ConnectionError"
+
+  # Transaction safety
+  enable_savepoints: true
+  rollback_on_error: true
+
+  # Data validation
+  strict_validation: true
+  sanitize_inputs: true
+  max_field_length: 1000
+
+processing:
+  batch_size: 100               # Smaller batches for safety
+  checkpoint_interval: 1000     # More frequent checkpoints
+  max_errors_per_batch: 10      # Stop batch if too many errors
+  error_threshold: 0.10         # Stop if >10% error rate
+
+validation:
+  required_fields:
+    - legal_name
+    - corp_type
+  date_fields:
+    - effective_date
+  skip_conditions:
+    - missing_legal_name
+    - missing_corp_type
+  # Enhanced validation
+  validate_dates: true
+  validate_addresses: true
+  validate_coordinates: true
+  validate_names: true
+
+entity_detection:
+  business_suffixes:
+    - LLC
+    - INC
+    - INCORPORATED
+    - CORP
+    - CORPORATION
+    - LTD
+    - LIMITED
+    - CO
+    - COMPANY
+    - LP
+    - LLP
+    - PARTNERSHIP
+    - TRUST
+    - BANK
+    - ASSOCIATION
+    - SOCIETY
+    - UNION
+    - FUND
+
+field_mappings:
+  corp_number: "Corp Number"
+  legal_name: "Legal Name"
+  corp_type: "Corporation Type"
+  effective_date: "Effective Date"
+  registered_agent:
+    name: "Registered Agent"
+    address1: "RA Address 1"
+    address2: "RA Address 2"
+    city: "RA City"
+    state: "RA State"
+    zip: "RA Zip"
+  home_office:
+    address1: "HO Address 1"
+    address2: "HO Address 2"
+    city: "HO City"
+    state: "HO State"
+    zip: "HO Zip"
+    country: "HO Country"
+    location: "HO Location"
+
+provenance:
+  confidence_score: 0.92
+  source_reliability: "official"
+  data_quality: "high"
+
+logging:
+  level: "INFO"
+  file: "${JOB_DIR}/logs/iowa_business_loader_robust_${DATE}.log"
+  max_size: "100MB"
+  retention: 30
+  # Enhanced logging
+  log_errors_to_file: true
+  error_log: "${JOB_DIR}/logs/errors_${DATE}.log"
+  log_validation_failures: true
+
+monitoring:
+  metrics_enabled: true
+  metrics_port: 9090
+  health_check_interval: 30
+  alert_thresholds:
+    error_rate: 0.05
+    processing_rate_min: 50
+    stalled_minutes: 15
+    memory_usage_mb: 1024
+
+recovery:
+  enable_dead_letter_queue: true
+  dlq_table: "failed_iowa_records"
+  retry_failed_records: true
+  max_retry_attempts: 3
+  save_failed_records_to_file: true
+  failed_records_dir: "${JOB_DIR}/failed_records"
+
+# Safety limits
+safety:
+  max_processing_time_minutes: 120
+  max_memory_mb: 2048
+  max_records_per_run: 1000000
+  kill_on_critical_error: false
+
+scheduling:
+  cron: "0 2 1-7 1,4,7,10 1"
+  timezone: "America/Chicago"
+  notification_email: "admin@example.com"
