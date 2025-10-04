@@ -106,6 +106,7 @@ class DistributedWorker:
 
             # Check if AWS profile is specified (for Raspberry Pi)
             aws_profile = os.environ.get('AWS_PROFILE')
+            aws_role_arn = os.environ.get('AWS_ROLE_ARN', 'arn:aws:iam::497434649789:role/six-worker')
 
             if aws_profile:
                 logger.info(f"Using AWS profile: {aws_profile}")
@@ -113,6 +114,23 @@ class DistributedWorker:
             else:
                 logger.info("Using default AWS credentials (IAM role or default profile)")
                 session = boto3.session.Session()
+
+            # Assume role if configured (for Raspberry Pi workers with IAM user)
+            if aws_role_arn and aws_profile:
+                logger.info(f"Assuming role: {aws_role_arn}")
+                sts_client = session.client('sts', region_name=self.aws_region)
+                assumed_role = sts_client.assume_role(
+                    RoleArn=aws_role_arn,
+                    RoleSessionName=f"six-worker-{self.worker_id}"
+                )
+
+                # Create new session with temporary credentials
+                session = boto3.session.Session(
+                    aws_access_key_id=assumed_role['Credentials']['AccessKeyId'],
+                    aws_secret_access_key=assumed_role['Credentials']['SecretAccessKey'],
+                    aws_session_token=assumed_role['Credentials']['SessionToken']
+                )
+                logger.info("✅ Successfully assumed role")
 
             client = session.client(
                 service_name='secretsmanager',
