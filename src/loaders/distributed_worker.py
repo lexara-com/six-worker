@@ -315,42 +315,119 @@ class DistributedWorker:
             f"Create a loader in one of these locations."
         )
 
+    def _download_input_file(self, input_config: Dict[str, Any]) -> str:
+        """
+        Download input file from URL or S3, or return local file path.
+
+        Supports three input methods:
+        1. file_path: Local file path (no download needed)
+        2. url: HTTP/HTTPS URL to download
+        3. s3_bucket + s3_key: S3 object to download
+
+        Returns: Path to local file (downloaded or original)
+        """
+        import tempfile
+        import urllib.request
+
+        # Method 1: Local file path
+        if 'file_path' in input_config:
+            file_path = input_config['file_path']
+            logger.info(f"Using local file: {file_path}")
+            return file_path
+
+        # Method 2: Download from URL
+        if 'url' in input_config:
+            url = input_config['url']
+            logger.info(f"📥 Downloading from URL: {url}")
+
+            # Create temp file with appropriate extension
+            file_ext = os.path.splitext(url.split('?')[0])[1] or '.csv'
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
+            temp_path = temp_file.name
+            temp_file.close()
+
+            # Download file
+            urllib.request.urlretrieve(url, temp_path)
+            logger.info(f"✅ Downloaded to: {temp_path}")
+            return temp_path
+
+        # Method 3: Download from S3
+        if 's3_bucket' in input_config and 's3_key' in input_config:
+            bucket = input_config['s3_bucket']
+            key = input_config['s3_key']
+            logger.info(f"📥 Downloading from S3: s3://{bucket}/{key}")
+
+            # Create temp file with appropriate extension
+            file_ext = os.path.splitext(key)[1] or '.csv'
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
+            temp_path = temp_file.name
+            temp_file.close()
+
+            # Download from S3 using existing boto3 session
+            s3_client = boto3.client('s3', region_name=self.aws_region)
+            s3_client.download_file(bucket, key, temp_path)
+            logger.info(f"✅ Downloaded to: {temp_path}")
+            return temp_path
+
+        raise ValueError(
+            "No valid input source specified. Provide one of:\n"
+            "  - file_path: Local file path\n"
+            "  - url: HTTP/HTTPS URL\n"
+            "  - s3_bucket + s3_key: S3 object"
+        )
+
     def _execute_job(self, job: Dict[str, Any]):
         """Execute the loader job"""
         job_id = job['job_id']
         job_type = job['job_type']
         config = job['config']
+        temp_file_path = None
 
-        # Mark job as running
-        self._update_job_status(job_id, 'running')
+        try:
+            # Mark job as running
+            self._update_job_status(job_id, 'running')
 
-        # Start heartbeat thread
-        self.current_job_id = job_id
-        self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
-        self.heartbeat_thread.start()
+            # Start heartbeat thread
+            self.current_job_id = job_id
+            self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+            self.heartbeat_thread.start()
 
-        # Dynamically load the appropriate loader class
-        LoaderClass = self._load_loader_class(job_type)
-        loader = LoaderClass(config)
+            # Download or get input file path
+            input_config = config.get('input', {})
+            file_path = self._download_input_file(input_config)
 
-        # Set up loader with distributed callbacks
-        loader.connection = self.db_conn
+            # Track if we need to clean up temp file
+            if 'url' in input_config or 's3_bucket' in input_config:
+                temp_file_path = file_path
 
-        # Process file with callbacks
-        loader.run(
-            file_path=config.get('input', {}).get('file_path'),
-            limit=config.get('processing', {}).get('limit'),
-            batch_size=config.get('processing', {}).get('batch_size', 100),
-            checkpoint_callback=lambda cp: self._save_checkpoint(job_id, cp),
-            log_callback=lambda log: self._send_log(job_id, log),
-            error_callback=lambda err: self._report_data_quality_issue(job_id, err)
-        )
+            # Dynamically load the appropriate loader class
+            LoaderClass = self._load_loader_class(job_type)
+            loader = LoaderClass(config)
 
-        # Mark job as completed
-        self._complete_job(job_id)
+            # Set up loader with distributed callbacks
+            loader.connection = self.db_conn
 
-        # Stop heartbeat
-        self.current_job_id = None
+            # Process file with callbacks
+            loader.run(
+                file_path=file_path,
+                limit=config.get('processing', {}).get('limit'),
+                batch_size=config.get('processing', {}).get('batch_size', 100),
+                checkpoint_callback=lambda cp: self._save_checkpoint(job_id, cp),
+                log_callback=lambda log: self._send_log(job_id, log),
+                error_callback=lambda err: self._report_data_quality_issue(job_id, err)
+            )
+
+            # Mark job as completed
+            self._complete_job(job_id)
+
+        finally:
+            # Stop heartbeat
+            self.current_job_id = None
+
+            # Clean up temp file if we downloaded one
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+                logger.info(f"🗑️  Cleaned up temp file: {temp_file_path}")
 
     def _update_job_status(self, job_id: str, status: str, error_message: str = None):
         """Update job status in Aurora"""
