@@ -1,0 +1,54 @@
+# Job Configuration Template
+# Copy this file and customize for your data loader
+
+loader:
+  name: "Template Loader"
+  type: "template"
+  version: "1.0.0"
+  description: "Template configuration for new loaders"
+
+# Source information
+source:
+  name: "Data Source Name"
+  type: "data_source_type"
+  update_frequency: "daily|weekly|monthly|quarterly"
+  url: "https://data.source.example.com/api"
+
+# Input configuration
+input:
+  file_path: "${PROJECT_DIR}/jobs/_TEMPLATE/data/sample.csv"
+  format: "csv"  # csv, json, xml, etc.
+  encoding: "utf-8"
+
+# Database connection (usually provided by worker)
+database:
+  host: "${DB_HOST}"
+  port: 5432
+  database: "graph_db"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+
+# Processing options
+processing:
+  batch_size: 1000
+  checkpoint_interval: 5000
+  max_retries: 3
+  retry_delay: 60  # seconds
+  limit: null  # null = no limit, or set a number for testing
+
+# Validation rules
+validation:
+  required_fields:
+    - field1
+    - field2
+  date_fields:
+    - created_date
+    - updated_date
+  skip_conditions:
+    - missing_required_field
+    - invalid_date_format
+
+# Custom settings for your loader
+custom:
+  # Add any loader-specific settings here
+  example_setting: "value"

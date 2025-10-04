@@ -42,12 +42,13 @@ class DistributedWorker:
         coordinator_url: str,
         worker_id: Optional[str] = None,
         capabilities: Optional[List[str]] = None,
-        aws_region: str = 'us-east-1'
+        aws_region: str = None
     ):
         self.coordinator_url = coordinator_url.rstrip('/')
         self.worker_id = worker_id or self._generate_worker_id()
         self.capabilities = capabilities or ['iowa_business', 'iowa_asbestos']
-        self.aws_region = aws_region
+        # Get AWS region from environment or parameter, default to us-east-1
+        self.aws_region = aws_region or os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION') or 'us-east-1'
 
         # Aurora connection (for direct writes)
         self.db_conn = None
@@ -59,6 +60,7 @@ class DistributedWorker:
         self.should_stop = False
 
         logger.info(f"Worker initialized: {self.worker_id}")
+        logger.info(f"AWS Region: {self.aws_region}")
         logger.info(f"Capabilities: {self.capabilities}")
         logger.info(f"Coordinator: {self.coordinator_url}")
 
@@ -90,30 +92,66 @@ class DistributedWorker:
             raise
 
     def _get_aurora_credentials(self) -> Dict[str, Any]:
-        """Fetch Aurora credentials from AWS Secrets Manager"""
+        """
+        Fetch Aurora credentials from AWS Secrets Manager.
+
+        Supports multiple authentication methods:
+        1. AWS profile (AWS_PROFILE env var) - for Raspberry Pi workers
+        2. IAM role - for EC2 instances
+        3. Environment variables - fallback for local development
+        """
         try:
-            # Try IAM role first (for EC2)
-            session = boto3.session.Session()
+            # Determine environment (dev, test, production)
+            environment = os.environ.get('ENVIRONMENT', 'production')
+
+            # Check if AWS profile is specified (for Raspberry Pi)
+            aws_profile = os.environ.get('AWS_PROFILE')
+
+            if aws_profile:
+                logger.info(f"Using AWS profile: {aws_profile}")
+                session = boto3.session.Session(profile_name=aws_profile)
+            else:
+                logger.info("Using default AWS credentials (IAM role or default profile)")
+                session = boto3.session.Session()
+
             client = session.client(
                 service_name='secretsmanager',
                 region_name=self.aws_region
             )
 
-            secret_name = f"{os.environ.get('ENVIRONMENT', 'production')}/database-write"
+            # Secret naming convention: {environment}/six-worker/database
+            secret_name = f"{environment}/six-worker/database"
+
+            logger.info(f"Fetching credentials from Secrets Manager: {secret_name} (region: {self.aws_region})")
             response = client.get_secret_value(SecretId=secret_name)
 
-            return json.loads(response['SecretString'])
+            credentials = json.loads(response['SecretString'])
+            logger.info(f"✅ Retrieved credentials from Secrets Manager for host: {credentials.get('host', 'unknown')}")
+
+            return credentials
 
         except ClientError as e:
-            # Fallback to environment variables (for Raspberry Pi)
-            logger.warning(f"Secrets Manager failed: {e}. Using environment variables.")
-            return {
+            logger.warning(f"Secrets Manager failed: {e}. Falling back to environment variables.")
+
+            # Fallback to environment variables
+            credentials = {
                 'host': os.environ.get('DB_HOST'),
                 'database': os.environ.get('DB_NAME', 'graph_db'),
                 'user': os.environ.get('DB_USER', 'graph_admin'),
                 'password': os.environ.get('DB_PASSWORD'),
                 'port': int(os.environ.get('DB_PORT', 5432))
             }
+
+            # Validate that we have credentials
+            if not credentials['host'] or not credentials['password']:
+                raise ValueError(
+                    "No database credentials available. Please either:\n"
+                    "  1. Set AWS_PROFILE and create secret: {env}/six-worker/database in Secrets Manager\n"
+                    "  2. Set environment variables: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT"
+                )
+
+            logger.info(f"Using environment variables for host: {credentials['host']}")
+            return credentials
 
     def run(self):
         """Main worker loop"""
@@ -177,14 +215,27 @@ class DistributedWorker:
 
     def _execute_claim(self, job_data: Dict[str, Any]):
         """Execute the claim instruction to update Aurora"""
-        claim_sql = job_data['claim_instruction']['sql']
-        claim_params = job_data['claim_instruction']['params']
+        try:
+            claim_sql = job_data['claim_instruction']['sql']
+            claim_params = job_data['claim_instruction']['params']
 
-        with self.db_conn.cursor() as cur:
-            cur.execute(claim_sql, claim_params)
-            self.db_conn.commit()
+            # Convert $1, $2 style placeholders to %s for psycopg2
+            import re
+            claim_sql = re.sub(r'\$\d+', '%s', claim_sql)
 
-        logger.info(f"✅ Job claimed in Aurora: {job_data['job_id']}")
+            # Convert list to tuple for psycopg2
+            if isinstance(claim_params, list):
+                claim_params = tuple(claim_params)
+
+            with self.db_conn.cursor() as cur:
+                cur.execute(claim_sql, claim_params)
+                self.db_conn.commit()
+
+            logger.info(f"✅ Job claimed in Aurora: {job_data['job_id']}")
+        except Exception as e:
+            self.db_conn.rollback()
+            logger.error(f"Failed to execute claim: {e}")
+            raise
 
     def _load_loader_class(self, job_type: str):
         """
@@ -402,7 +453,7 @@ def main():
     parser.add_argument('--worker-id', help='Worker ID (auto-generated if not provided)')
     parser.add_argument('--capabilities', nargs='+', default=['iowa_business', 'iowa_asbestos'],
                        help='Job types this worker can handle')
-    parser.add_argument('--aws-region', default='us-east-1', help='AWS region')
+    parser.add_argument('--aws-region', default=None, help='AWS region (default: read from AWS_REGION or AWS_DEFAULT_REGION env var)')
 
     args = parser.parse_args()
 
