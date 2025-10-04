@@ -75,6 +75,13 @@ class DistributedWorker:
             # Get credentials from AWS Secrets Manager
             db_creds = self._get_aurora_credentials()
 
+            # Set environment variables so loaders can access them
+            os.environ['DB_HOST'] = db_creds['host']
+            os.environ['DB_NAME'] = db_creds['database']
+            os.environ['DB_USER'] = db_creds['user']
+            os.environ['DB_PASSWORD'] = db_creds['password']
+            os.environ['DB_PORT'] = str(db_creds['port'])
+
             # Connect to Aurora
             self.db_conn = psycopg2.connect(
                 host=db_creds['host'],
