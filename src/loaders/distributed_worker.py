@@ -106,7 +106,7 @@ class DistributedWorker:
 
             # Check if AWS profile is specified (for Raspberry Pi)
             aws_profile = os.environ.get('AWS_PROFILE')
-            aws_role_arn = os.environ.get('AWS_ROLE_ARN', 'arn:aws:iam::497434649789:role/six-worker')
+            aws_role_arn = os.environ.get('AWS_ROLE_ARN', 'arn:aws:iam::561107861343:role/six-worker')
 
             if aws_profile:
                 logger.info(f"Using AWS profile: {aws_profile}")
