@@ -2,6 +2,9 @@
 """
 Distributed Worker Client
 Connects to Cloudflare Coordinator and executes loader jobs
+
+Uses plugin-based loader discovery - automatically finds and loads
+the appropriate loader class based on job type.
 """
 import os
 import sys
@@ -12,6 +15,9 @@ import psycopg2
 import requests
 import threading
 import logging
+import importlib
+import importlib.util
+from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import boto3
@@ -19,9 +25,6 @@ from botocore.exceptions import ClientError
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from loaders.iowa_business_loader import IowaBusinessLoader
-from loaders.iowa_asbestos_loader import IowaAsbestosLoader
 
 # Configure logging
 logging.basicConfig(
@@ -183,6 +186,59 @@ class DistributedWorker:
 
         logger.info(f"✅ Job claimed in Aurora: {job_data['job_id']}")
 
+    def _load_loader_class(self, job_type: str):
+        """
+        Dynamically load the appropriate loader class for the job type.
+
+        Tries multiple strategies:
+        1. Load from jobs/{job_type}/loader.py
+        2. Load from src/loaders/{job_type}_loader.py (legacy)
+        3. Raise error if not found
+        """
+        # Get project root
+        project_root = Path(__file__).parent.parent.parent
+
+        # Strategy 1: Check jobs folder (new plugin approach)
+        job_dir = project_root / 'jobs' / job_type
+        loader_file = job_dir / 'loader.py'
+
+        if loader_file.exists():
+            logger.info(f"📦 Loading plugin from: {loader_file}")
+            spec = importlib.util.spec_from_file_location(f"job_{job_type}", loader_file)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            # Try to find a class that ends with 'Loader'
+            for name in dir(module):
+                obj = getattr(module, name)
+                if isinstance(obj, type) and name.endswith('Loader') and name != 'Loader':
+                    logger.info(f"✅ Loaded loader class: {name}")
+                    return obj
+
+            raise ImportError(f"No Loader class found in {loader_file}")
+
+        # Strategy 2: Legacy loader in src/loaders (backward compatibility)
+        legacy_module_name = f"{job_type}_loader"
+        legacy_class_name = ''.join(word.capitalize() for word in job_type.split('_')) + 'Loader'
+
+        try:
+            logger.info(f"📦 Trying legacy loader: loaders.{legacy_module_name}")
+            module = importlib.import_module(f"loaders.{legacy_module_name}")
+            loader_class = getattr(module, legacy_class_name)
+            logger.info(f"✅ Loaded legacy loader: {legacy_class_name}")
+            return loader_class
+        except (ImportError, AttributeError) as e:
+            logger.error(f"❌ Failed to load legacy loader: {e}")
+
+        # Neither strategy worked
+        raise ImportError(
+            f"Could not find loader for job type '{job_type}'.\n"
+            f"Tried:\n"
+            f"  1. {loader_file}\n"
+            f"  2. src/loaders/{legacy_module_name}.py\n"
+            f"Create a loader in one of these locations."
+        )
+
     def _execute_job(self, job: Dict[str, Any]):
         """Execute the loader job"""
         job_id = job['job_id']
@@ -197,13 +253,9 @@ class DistributedWorker:
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self.heartbeat_thread.start()
 
-        # Select loader based on job type
-        if job_type == 'iowa_business':
-            loader = IowaBusinessLoader(config)
-        elif job_type == 'iowa_asbestos':
-            loader = IowaAsbestosLoader(config)
-        else:
-            raise ValueError(f"Unknown job type: {job_type}")
+        # Dynamically load the appropriate loader class
+        LoaderClass = self._load_loader_class(job_type)
+        loader = LoaderClass(config)
 
         # Set up loader with distributed callbacks
         loader.connection = self.db_conn
