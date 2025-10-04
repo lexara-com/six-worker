@@ -5,7 +5,8 @@
 set -e
 
 # Configuration
-export ENVIRONMENT=production
+# Change to 'production' once production secret is created in Secrets Manager
+export ENVIRONMENT=dev
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_PROFILE=six-worker-pi
 export AWS_ROLE_ARN=arn:aws:iam::561107861343:role/six-worker
