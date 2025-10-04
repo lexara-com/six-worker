@@ -646,13 +646,16 @@ class IowaBusinessLoader(BaseDataLoader):
 
     def setup_client(self) -> ProposeAPIClient:
         """Setup Propose API client"""
+        # Get database config from config file or use defaults
+        db_config = self.config.get('database', {})
+
         # Expand environment variables with fallback defaults
         conn_params = {
-            'host': os.environ.get('DB_HOST', os.path.expandvars(self.config['database'].get('host', 'localhost'))),
-            'database': os.environ.get('DB_DATABASE', os.path.expandvars(self.config['database'].get('database', 'graph_db'))),
-            'user': os.environ.get('DB_USER', os.path.expandvars(self.config['database'].get('user', 'graph_admin'))),
-            'password': os.environ.get('DB_PASSWORD', os.path.expandvars(self.config['database'].get('password', 'your_password'))),
-            'port': int(os.environ.get('DB_PORT', self.config['database'].get('port', 5432)))
+            'host': os.environ.get('DB_HOST', os.path.expandvars(db_config.get('host', 'localhost'))),
+            'database': os.environ.get('DB_DATABASE', os.environ.get('DB_NAME', os.path.expandvars(db_config.get('database', 'graph_db')))),
+            'user': os.environ.get('DB_USER', os.path.expandvars(db_config.get('user', 'graph_admin'))),
+            'password': os.environ.get('DB_PASSWORD', os.path.expandvars(db_config.get('password', 'your_password'))),
+            'port': int(os.environ.get('DB_PORT', db_config.get('port', 5432)))
         }
 
         # Test connection
