@@ -1,0 +1,17 @@
+# =============================================
+# Terraform Variables Example
+# Copy to terraform.tfvars and fill in your values
+# =============================================
+
+# Environment
+environment = "production" # or "staging", "development"
+
+# Database Configuration
+db_host = "six-worker-cluster.cluster-xxxxx.us-east-1.rds.amazonaws.com" # Your Aurora cluster endpoint
+
+# Database Passwords (DO NOT COMMIT TO GIT)
+db_password_write = "your-secure-password-here"     # For graph_admin user
+db_password_read  = "your-read-only-password-here"  # For hyperdrive_reader user
+
+# AWS Region (auto-detected if not specified)
+# region = "us-east-1"

@@ -65,6 +65,11 @@ class BaseDataLoader(ABC):
         self.progress_interval_seconds = config.get('progress_interval_seconds', 300)  # 5 minutes default
         self.last_progress_report = None
         self.last_progress_count = 0
+
+        # Distributed mode callbacks
+        self.checkpoint_callback = None
+        self.log_callback = None
+        self.error_callback = None
     
     def setup_logging(self) -> logging.Logger:
         """Configure logging with proper formatting"""
@@ -246,11 +251,52 @@ class BaseDataLoader(ABC):
         self.last_progress_report = current_time
         self.last_progress_count = self.stats['total_processed']
 
+    def _send_log(self, level: str, message: str, metadata: Optional[Dict[str, Any]] = None):
+        """Send log with callback if in distributed mode"""
+        # Always log locally
+        log_method = getattr(self.logger, level.lower(), self.logger.info)
+        log_method(message)
+
+        # Call distributed mode log callback
+        if self.log_callback:
+            self.log_callback({
+                'level': level.upper(),
+                'message': message,
+                'metadata': metadata or {},
+                'timestamp': datetime.utcnow().isoformat()
+            })
+
+    def _report_data_quality_issue(self, issue: Dict[str, Any]):
+        """Report data quality issue via callback"""
+        if self.error_callback:
+            self.error_callback(issue)
+
+    def _extract_field_from_error(self, error: str) -> Optional[str]:
+        """Extract field name from validation error message"""
+        # Try to extract field from common patterns like "Invalid zip: ..." or "home_office.zip: ..."
+        if ':' in error:
+            parts = error.split(':')
+            field = parts[0].strip()
+            # Clean up common prefixes
+            field = field.replace('Invalid ', '').replace('Missing ', '')
+            return field
+        return None
+
+    def _extract_value_from_error(self, error: str, record: Dict[str, Any]) -> Optional[str]:
+        """Extract invalid value from error message or record"""
+        # Try to extract value after colon
+        if ':' in error:
+            parts = error.split(':', 1)
+            if len(parts) > 1:
+                value = parts[1].strip()
+                return value[:100]  # Truncate long values
+        return None
+
     def save_checkpoint(self, position: int):
         """Save processing checkpoint"""
         if not self.source_id:
             return
-        
+
         try:
             with self.propose_client._get_connection() as conn:
                 with conn.cursor() as cursor:
@@ -270,11 +316,22 @@ class BaseDataLoader(ABC):
                         self.source_id
                     ))
                     conn.commit()
-                    
+
             self.stats['checkpoints_saved'] += 1
             self.last_checkpoint = position
             self.logger.debug(f"Checkpoint saved at position {position}")
-            
+
+            # Call distributed mode checkpoint callback
+            if self.checkpoint_callback:
+                self.checkpoint_callback({
+                    'records_processed': position,
+                    'successful': self.stats['successful'],
+                    'failed': self.stats['failed'],
+                    'skipped': self.stats['skipped'],
+                    'entities_created': self.stats['entities_created'],
+                    'relationships_created': self.stats['relationships_created']
+                })
+
         except Exception as e:
             self.logger.error(f"Error saving checkpoint: {e}")
     
@@ -364,6 +421,19 @@ class BaseDataLoader(ABC):
                     self.logger.warning(f"Validation errors for {record_id} ({company_name}): {errors}")
                     self.stats['failed'] += 1
                     results.append({'status': 'failed', 'errors': errors})
+
+                    # Report data quality issues in distributed mode
+                    for error in errors:
+                        self._report_data_quality_issue({
+                            'source_record_id': record_id,
+                            'issue_type': 'validation_error',
+                            'severity': 'warning',
+                            'field_name': self._extract_field_from_error(error),
+                            'invalid_value': self._extract_value_from_error(error, record),
+                            'message': error,
+                            'raw_record': raw_record
+                        })
+
                     continue
 
                 # Process through Propose API with circuit breaker
@@ -414,9 +484,26 @@ class BaseDataLoader(ABC):
         self.stats['total_processed'] += len(batch)
         return results
     
-    def run(self, file_path: str, limit: Optional[int] = None, 
-            batch_size: int = 100, start_from: int = 0) -> Dict[str, Any]:
-        """Main execution method"""
+    def run(self, file_path: str, limit: Optional[int] = None,
+            batch_size: int = 100, start_from: int = 0,
+            checkpoint_callback=None, log_callback=None, error_callback=None) -> Dict[str, Any]:
+        """
+        Main execution method
+
+        Args:
+            file_path: Path to data file
+            limit: Optional record limit
+            batch_size: Records per batch
+            start_from: Record offset to start from
+            checkpoint_callback: Callback for checkpoints (callable(checkpoint: dict))
+            log_callback: Callback for logs (callable(log_entry: dict))
+            error_callback: Callback for data quality errors (callable(error: dict))
+        """
+
+        # Set distributed mode callbacks
+        self.checkpoint_callback = checkpoint_callback
+        self.log_callback = log_callback
+        self.error_callback = error_callback
         
         # Expand environment variables in file path
         file_path = os.path.expandvars(file_path)

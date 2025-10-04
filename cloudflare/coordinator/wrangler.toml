@@ -1,0 +1,61 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "lexara-coordinator"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = true
+
+# Environment: Production
+[env.production]
+name = "lexara-coordinator-prod"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+AWS_REGION = "us-east-1"
+
+# Secrets (set via: wrangler secret put <NAME> --env production)
+# - AWS_ACCESS_KEY_ID
+# - AWS_SECRET_ACCESS_KEY
+
+# Hyperdrive binding (read-only database access)
+[[env.production.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "3b404e5336964e7d9ebd6581c62efa03"
+
+# Queue Producer binding (for job submissions)
+[[env.production.queues.producers]]
+queue = "job-queue-prod"
+binding = "JOB_QUEUE"
+
+# Environment: Staging
+[env.staging]
+name = "lexara-coordinator-staging"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+AWS_REGION = "us-east-1"
+
+[[env.staging.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "YOUR_STAGING_HYPERDRIVE_ID"
+
+[[env.staging.queues.producers]]
+queue = "job-queue-staging"
+binding = "JOB_QUEUE"
+
+# Environment: Development
+[env.development]
+name = "lexara-coordinator-dev"
+
+[env.development.vars]
+ENVIRONMENT = "development"
+AWS_REGION = "us-east-1"
+
+[[env.development.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "YOUR_DEV_HYPERDRIVE_ID"
+
+[[env.development.queues.producers]]
+queue = "job-queue-dev"
+binding = "JOB_QUEUE"

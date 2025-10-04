@@ -1,0 +1,56 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "lexara-queue-consumer"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Environment: Production
+[env.production]
+name = "lexara-queue-consumer-prod"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+AWS_REGION = "us-east-1"
+
+# Hyperdrive binding for database access (write access via graph_admin)
+[[env.production.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "17eea78cda4f4af89c38ac46442a4b87"
+
+# Queue Consumer binding
+[[env.production.queues.consumers]]
+queue = "job-queue-prod"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "job-queue-prod-dlq"
+
+# Environment: Staging
+[env.staging]
+name = "lexara-queue-consumer-staging"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+AWS_REGION = "us-east-1"
+DB_NAME = "graph_db"
+DB_PORT = "5432"
+
+[[env.staging.queues.consumers]]
+queue = "job-queue-staging"
+max_batch_size = 10
+max_batch_timeout = 5
+
+# Environment: Development
+[env.development]
+name = "lexara-queue-consumer-dev"
+
+[env.development.vars]
+ENVIRONMENT = "development"
+AWS_REGION = "us-east-1"
+DB_NAME = "graph_db"
+DB_PORT = "5432"
+
+[[env.development.queues.consumers]]
+queue = "job-queue-dev"
+max_batch_size = 5
+max_batch_timeout = 3

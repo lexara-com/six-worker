@@ -1,0 +1,8 @@
+# Cloudflare Python Workers dependencies
+# Note: Many standard library modules are available by default
+
+# AWS SDK (if needed for direct Secrets Manager access)
+# boto3>=1.28.0
+
+# Currently, Cloudflare Python Workers have limited package support
+# Most functionality uses built-in modules and Cloudflare bindings

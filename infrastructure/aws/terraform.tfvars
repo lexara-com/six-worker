@@ -1,0 +1,5 @@
+environment         = "production"
+aws_region          = "us-east-1"
+db_host             = "98.85.51.253"
+db_password_write   = "DevPassword123!"
+db_password_read    = "HyperDrive2025!SecureRead"
