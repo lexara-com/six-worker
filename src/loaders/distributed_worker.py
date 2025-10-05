@@ -375,6 +375,9 @@ class DistributedWorker:
             temp_file.close()
 
             # Download from S3 using assumed role credentials
+            logger.info(f"DEBUG S3 download: self.aws_credentials = {self.aws_credentials}")
+            logger.info(f"DEBUG S3 download: type = {type(self.aws_credentials)}")
+            logger.info(f"DEBUG S3 download: bool = {bool(self.aws_credentials)}")
             if self.aws_credentials:
                 logger.info("Using assumed role credentials for S3 access")
                 s3_client = boto3.client('s3', region_name=self.aws_region, **self.aws_credentials)
