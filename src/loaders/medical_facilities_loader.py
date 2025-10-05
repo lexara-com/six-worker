@@ -75,8 +75,8 @@ class MedicalFacilitiesLoader:
                     """, (self.config['source_type'], os.path.basename(file_path)))
 
                     result = cursor.fetchone()
-                    if result and result[1] == 'completed':
-                        self.logger.info(f"Source already processed: {result[0]}")
+                    if result and result['status'] == 'completed':
+                        self.logger.info(f"Source already processed: {result['source_id']}")
                         return None
 
                     # Create new source
@@ -92,7 +92,8 @@ class MedicalFacilitiesLoader:
                         os.path.basename(file_path)
                     ))
 
-                    self.source_id = cursor.fetchone()[0]
+                    result = cursor.fetchone()
+                    self.source_id = result['source_id']
                     conn.commit()
                     self.logger.info(f"Registered source: {self.source_id}")
                     return self.source_id
