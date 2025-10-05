@@ -8,7 +8,8 @@ import csv
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
-from propose_api import ProposeAPIClient, NodeType, RelationshipType
+from propose_api_client import ProposeAPIClient
+from graph_types import NodeType, RelationshipType
 
 logger = logging.getLogger(__name__)
 
