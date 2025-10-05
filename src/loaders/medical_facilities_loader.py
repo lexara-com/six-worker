@@ -65,7 +65,7 @@ class MedicalFacilitiesLoader:
     def register_source(self, file_path: str) -> Optional[str]:
         """Register data source"""
         try:
-            with self.client.get_connection() as conn:
+            with self.client._get_connection() as conn:
                 with conn.cursor() as cursor:
                     # Check if already processed
                     cursor.execute("""
@@ -165,7 +165,7 @@ class MedicalFacilitiesLoader:
             self.report_progress(datetime.now(), force=True)
 
             # Mark source as completed
-            with self.client.get_connection() as conn:
+            with self.client._get_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         UPDATE sources
