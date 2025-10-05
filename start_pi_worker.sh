@@ -22,6 +22,7 @@ CAPABILITIES=(
   iowa_motor_vehicle_service
   iowa_business
   iowa_asbestos
+  medical_facilities
 )
 
 # Start the worker
