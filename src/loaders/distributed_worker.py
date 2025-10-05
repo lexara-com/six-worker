@@ -162,6 +162,7 @@ class DistributedWorker:
 
             credentials = json.loads(response['SecretString'])
             logger.info(f"✅ Retrieved credentials from Secrets Manager for host: {credentials.get('host', 'unknown')}")
+            logger.info(f"DEBUG: self.aws_credentials after secrets fetch: {self.aws_credentials is not None}")
 
             return credentials
 
