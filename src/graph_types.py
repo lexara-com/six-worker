@@ -17,6 +17,7 @@ class NodeType(Enum):
     PERSON = "Person"
     COMPANY = "Company"
     LAW_FIRM = "LawFirm"  # Special type of company
+    MEDICAL_FACILITY = "MedicalFacility"  # Healthcare facilities
     
     # Geographic Entities
     COUNTRY = "Country"
@@ -38,7 +39,7 @@ class NodeType(Enum):
     @classmethod
     def get_entity_types(cls) -> Set['NodeType']:
         """Get all entity types (non-geographic)"""
-        return {cls.PERSON, cls.COMPANY, cls.THING, cls.EVENT}
+        return {cls.PERSON, cls.COMPANY, cls.LAW_FIRM, cls.MEDICAL_FACILITY, cls.THING, cls.EVENT}
 
 
 class EntityClass(Enum):
