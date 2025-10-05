@@ -495,15 +495,25 @@ class DistributedWorker:
         logger.info(f"💾 Checkpoint saved: {checkpoint.get('records_processed', 0)} records")
 
     def _send_log(self, job_id: str, log_entry: Dict[str, Any]):
-        """Send log entry to CloudWatch (via shared logger)"""
-        # This will be handled by CloudWatch logger utility
-        # For now, just log locally
+        """Send log entry to job_logs table"""
         level = log_entry.get('level', 'INFO')
         message = log_entry.get('message', '')
         metadata = log_entry.get('metadata', {})
 
+        # Log locally
         log_method = getattr(logger, level.lower(), logger.info)
         log_method(f"{message} | {json.dumps(metadata)}")
+
+        # Store in database
+        try:
+            with self.db_conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO job_logs (log_id, job_id, timestamp, level, message, metadata)
+                    VALUES (gen_ulid(), %s, NOW(), %s, %s, %s)
+                """, (job_id, level, message, json.dumps(metadata)))
+                self.db_conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to write log to database: {e}")
 
     def _report_data_quality_issue(self, job_id: str, issue: Dict[str, Any]):
         """Report data quality issue to Aurora"""
