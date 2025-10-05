@@ -144,6 +144,7 @@ class DistributedWorker:
 
             # Store session for later use (S3 downloads, etc.)
             self.aws_session = session
+            logger.info(f"Stored AWS session for later use: {self.aws_session is not None}")
 
             client = session.client(
                 service_name='secretsmanager',
@@ -370,11 +371,12 @@ class DistributedWorker:
             temp_file.close()
 
             # Download from S3 using assumed role session
+            logger.info(f"AWS session status: {self.aws_session is not None}")
             if self.aws_session:
                 logger.info("Using assumed role session for S3 access")
                 s3_client = self.aws_session.client('s3', region_name=self.aws_region)
             else:
-                logger.warning("No AWS session available, using default boto3 client")
+                logger.warning(f"No AWS session available (self.aws_session={self.aws_session}), using default boto3 client")
                 s3_client = boto3.client('s3', region_name=self.aws_region)
             s3_client.download_file(bucket, key, temp_path)
             logger.info(f"✅ Downloaded to: {temp_path}")
