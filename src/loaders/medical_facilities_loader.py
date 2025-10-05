@@ -215,7 +215,7 @@ class MedicalFacilitiesLoader:
                 facility_attrs['zip_code'] = zip_code
 
             # Propose facility entity
-            self.client.propose_fact(
+            result = self.client.propose_fact(
                 source_entity=(NodeType.MEDICAL_FACILITY, facility_name),
                 target_entity=(NodeType.STATE, state),
                 relationship=RelationshipType.LOCATED_IN,
@@ -225,7 +225,17 @@ class MedicalFacilitiesLoader:
                 provenance_confidence=0.90
             )
 
-            self.records_imported += 1
+            if not result.success:
+                self.logger.error(f"Failed to propose fact for {facility_name}: {result.error_message}")
+                if self.error_callback:
+                    self.error_callback({
+                        'source_record_id': facility_name,
+                        'issue_type': 'propose_fact_failed',
+                        'severity': 'error',
+                        'message': result.error_message
+                    })
+            else:
+                self.records_imported += 1
 
         except Exception as e:
             self.logger.error(f"Error processing facility: {e}")
