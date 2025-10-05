@@ -67,17 +67,26 @@ class MedicalFacilitiesLoader:
         try:
             with self.client._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Check if already processed
+                    # Check if already completed or currently processing
+                    # For medical facilities (nationwide dataset), check by source_type only
                     cursor.execute("""
-                        SELECT source_id, status
+                        SELECT source_id, status, import_started_at
                         FROM sources
-                        WHERE source_type = %s AND file_name = %s
-                    """, (self.config['source_type'], os.path.basename(file_path)))
+                        WHERE source_type = %s
+                        ORDER BY import_started_at DESC
+                        LIMIT 1
+                    """, (self.config['source_type'],))
 
                     result = cursor.fetchone()
-                    if result and result['status'] == 'completed':
-                        self.logger.info(f"Source already processed: {result['source_id']}")
-                        return None
+                    if result:
+                        if result['status'] == 'completed':
+                            self.logger.info(f"Source already processed: {result['source_id']}")
+                            return None
+                        elif result['status'] == 'processing':
+                            # Resume existing processing job
+                            self.logger.info(f"Resuming existing source: {result['source_id']}")
+                            self.source_id = result['source_id']
+                            return self.source_id
 
                     # Create new source
                     cursor.execute("""
