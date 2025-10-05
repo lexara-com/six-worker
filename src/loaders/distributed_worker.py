@@ -50,6 +50,9 @@ class DistributedWorker:
         # Get AWS region from environment or parameter, default to us-east-1
         self.aws_region = aws_region or os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION') or 'us-east-1'
 
+        # AWS credentials (will be set during credential fetch)
+        self.aws_credentials = None
+
         # Aurora connection (for direct writes)
         self.db_conn = None
         self._setup_database()
@@ -58,9 +61,6 @@ class DistributedWorker:
         self.current_job_id = None
         self.heartbeat_thread = None
         self.should_stop = False
-
-        # AWS credentials (will be set during credential fetch)
-        self.aws_credentials = None
 
         logger.info(f"Worker initialized: {self.worker_id}")
         logger.info(f"AWS Region: {self.aws_region}")
