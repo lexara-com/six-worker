@@ -371,8 +371,10 @@ class DistributedWorker:
 
             # Download from S3 using assumed role session
             if self.aws_session:
+                logger.info("Using assumed role session for S3 access")
                 s3_client = self.aws_session.client('s3', region_name=self.aws_region)
             else:
+                logger.warning("No AWS session available, using default boto3 client")
                 s3_client = boto3.client('s3', region_name=self.aws_region)
             s3_client.download_file(bucket, key, temp_path)
             logger.info(f"✅ Downloaded to: {temp_path}")
