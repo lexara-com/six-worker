@@ -4,10 +4,17 @@ Medical Facilities Loader
 Loads CMS Provider of Services data (nationwide medical facilities) into the knowledge graph.
 """
 import os
+import sys
 import csv
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
+
+# Add parent directories to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'examples'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 from propose_api_client import ProposeAPIClient
 from graph_types import NodeType, RelationshipType
 
