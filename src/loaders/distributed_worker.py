@@ -59,6 +59,9 @@ class DistributedWorker:
         self.heartbeat_thread = None
         self.should_stop = False
 
+        # AWS session (will be set during credential fetch)
+        self.aws_session = None
+
         logger.info(f"Worker initialized: {self.worker_id}")
         logger.info(f"AWS Region: {self.aws_region}")
         logger.info(f"Capabilities: {self.capabilities}")
@@ -138,6 +141,9 @@ class DistributedWorker:
                     aws_session_token=assumed_role['Credentials']['SessionToken']
                 )
                 logger.info("✅ Successfully assumed role")
+
+            # Store session for later use (S3 downloads, etc.)
+            self.aws_session = session
 
             client = session.client(
                 service_name='secretsmanager',
