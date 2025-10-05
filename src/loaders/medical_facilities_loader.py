@@ -158,11 +158,9 @@ class MedicalFacilitiesLoader:
 
                     # Report progress
                     if self.records_processed % batch_size == 0:
-                        self.client.commit()
                         self.report_progress(datetime.now())
 
-            # Final commit and progress report
-            self.client.commit()
+            # Final progress report
             self.report_progress(datetime.now(), force=True)
 
             # Mark source as completed
