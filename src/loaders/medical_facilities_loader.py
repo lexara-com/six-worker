@@ -60,7 +60,7 @@ class MedicalFacilitiesLoader:
             'port': int(os.environ.get('DB_PORT', db_config.get('port', 5432)))
         }
 
-        return ProposeAPIClient(conn_params, auto_commit=True)
+        return ProposeAPIClient(conn_params)
 
     def register_source(self, file_path: str) -> Optional[str]:
         """Register data source"""
