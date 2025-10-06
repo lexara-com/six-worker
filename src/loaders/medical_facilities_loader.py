@@ -196,52 +196,118 @@ class MedicalFacilitiesLoader:
             raise
 
     def process_facility(self, record: Dict[str, str]):
-        """Process a single facility record"""
+        """Process a single facility record with full geographic hierarchy"""
         try:
             # Extract fields using mapping
             facility_name = record.get(self.field_mapping['business_name'], '').strip()
             street_address = record.get(self.field_mapping['street_address'], '').strip()
-            city = record.get(self.field_mapping['city'], '').strip()
-            state = record.get(self.field_mapping['state'], '').strip()
+            city_name = record.get(self.field_mapping['city'], '').strip()
+            state_code = record.get(self.field_mapping['state'], '').strip()
             zip_code = record.get(self.field_mapping['zip_code'], '').strip()
 
-            if not facility_name or not city or not state:
+            if not facility_name or not city_name or not state_code:
                 return
 
-            # Build address
-            address_parts = [p for p in [street_address, city, state, zip_code] if p]
-            full_address = ', '.join(address_parts) if address_parts else None
+            source_info = (self.config['source_name'], self.config['source_type'])
 
-            # Create facility attributes
-            facility_attrs = {
-                'name': facility_name,
-                'address': full_address
-            }
-
-            if street_address:
-                facility_attrs['street_address'] = street_address
-            if zip_code:
-                facility_attrs['zip_code'] = zip_code
-
-            # Propose facility entity
-            result = self.client.propose_fact(
-                source_entity=(NodeType.MEDICAL_FACILITY, facility_name),
-                target_entity=(NodeType.STATE, state),
+            # Step 1: Create City -> State relationship
+            city_result = self.client.propose_fact(
+                source_entity=(NodeType.CITY, city_name),
+                target_entity=(NodeType.STATE, state_code),
                 relationship=RelationshipType.LOCATED_IN,
-                source_info=(self.config['source_name'], self.config['source_type']),
-                source_attributes=facility_attrs,
+                source_info=source_info,
+                source_attributes={'name': city_name},
                 relationship_strength=0.95,
                 provenance_confidence=0.90
             )
 
-            if not result.success:
-                self.logger.error(f"Failed to propose fact for {facility_name}: {result.error_message}")
+            if not city_result.success:
+                self.logger.error(f"Failed to create city {city_name}: {city_result.error_message}")
+                if self.error_callback:
+                    self.error_callback({
+                        'source_record_id': facility_name,
+                        'issue_type': 'city_creation_failed',
+                        'severity': 'error',
+                        'message': city_result.error_message
+                    })
+                return
+
+            # Step 2: Create Address node if we have street address
+            if street_address and zip_code:
+                # Build full address string
+                full_address = f"{street_address}, {city_name}, {state_code} {zip_code}"
+
+                address_attrs = {
+                    'street_address': street_address,
+                    'city': city_name,
+                    'state': state_code,
+                    'zip_code': zip_code,
+                    'full_address': full_address
+                }
+
+                # Create Address -> City relationship
+                address_result = self.client.propose_fact(
+                    source_entity=(NodeType.ADDRESS, full_address),
+                    target_entity=(NodeType.CITY, city_name),
+                    relationship=RelationshipType.LOCATED_IN,
+                    source_info=source_info,
+                    source_attributes=address_attrs,
+                    relationship_strength=0.95,
+                    provenance_confidence=0.90
+                )
+
+                if not address_result.success:
+                    self.logger.error(f"Failed to create address for {facility_name}: {address_result.error_message}")
+                    # Continue anyway - we'll link facility to city directly
+
+                # Step 3: Create Facility -> Address relationship
+                facility_attrs = {
+                    'name': facility_name,
+                    'street_address': street_address,
+                    'city': city_name,
+                    'state': state_code,
+                    'zip_code': zip_code
+                }
+
+                facility_result = self.client.propose_fact(
+                    source_entity=(NodeType.MEDICAL_FACILITY, facility_name),
+                    target_entity=(NodeType.ADDRESS, full_address),
+                    relationship=RelationshipType.LOCATED_AT,
+                    source_info=source_info,
+                    source_attributes=facility_attrs,
+                    relationship_strength=0.95,
+                    provenance_confidence=0.90
+                )
+
+            else:
+                # No street address - link facility directly to city
+                facility_attrs = {
+                    'name': facility_name,
+                    'city': city_name,
+                    'state': state_code
+                }
+
+                if zip_code:
+                    facility_attrs['zip_code'] = zip_code
+
+                facility_result = self.client.propose_fact(
+                    source_entity=(NodeType.MEDICAL_FACILITY, facility_name),
+                    target_entity=(NodeType.CITY, city_name),
+                    relationship=RelationshipType.LOCATED_IN,
+                    source_info=source_info,
+                    source_attributes=facility_attrs,
+                    relationship_strength=0.95,
+                    provenance_confidence=0.90
+                )
+
+            if not facility_result.success:
+                self.logger.error(f"Failed to create facility {facility_name}: {facility_result.error_message}")
                 if self.error_callback:
                     self.error_callback({
                         'source_record_id': facility_name,
                         'issue_type': 'propose_fact_failed',
                         'severity': 'error',
-                        'message': result.error_message
+                        'message': facility_result.error_message
                     })
             else:
                 self.records_imported += 1
